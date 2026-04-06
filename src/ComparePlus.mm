@@ -442,6 +442,28 @@ static void doCompare(bool selectionOnly, bool findUniqueMode)
 {
     @autoreleasepool {
 
+    // Check that at least 2 files are open.
+    // Query the host's tab managers directly via the window controller.
+    id wc = getHostController();
+    if (wc)
+    {
+        int count = 0;
+        @try {
+            id primaryTM = [wc valueForKey:@"_tabManager"];
+            id subTMV    = [wc valueForKey:@"_subTabManagerV"];
+            if (primaryTM)
+                count += [[primaryTM valueForKey:@"allEditors"] count];
+            if (subTMV)
+                count += [[subTMV valueForKey:@"allEditors"] count];
+        } @catch (...) {}
+
+        if (count < 2)
+        {
+            showMessage(@"ComparePlus", @"You should have at least 2 open files to compare.");
+            return;
+        }
+    }
+
     // Step 1: Move active tab to Other Vertical View
     hostAction(@selector(moveToOtherVerticalView:));
 
