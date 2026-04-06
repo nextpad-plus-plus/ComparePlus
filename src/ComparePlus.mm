@@ -719,6 +719,33 @@ static void clearAllCompares()
 //  Navigation
 // =====================================================================
 
+// Jump to a diff line in both views: center, move caret, highlight in purple
+static void jumpToDiffLine(int view, intptr_t line)
+{
+    int otherView = getOtherViewId(view);
+    intptr_t otherLine = otherViewMatchingLine(view, line);
+    if (otherLine < 0)
+        otherLine = line; // fallback: same line number
+
+    // Set caret line background to #dec9f8 (purple highlight) in both views,
+    // visible even in the unfocused view.
+    constexpr int purple = 0x60f8c9de; // #dec9f8 with ~37% alpha
+    for (int v = 0; v < 2; ++v)
+    {
+        CallScintilla(v, SCI_SETELEMENTCOLOUR, SC_ELEMENT_CARET_LINE_BACK, purple);
+        CallScintilla(v, SCI_SETCARETLINELAYER, SC_LAYER_UNDER_TEXT, 0);
+        CallScintilla(v, SCI_SETCARETLINEVISIBLEALWAYS, 1, 0);
+    }
+
+    // Center and move caret in both views
+    centerAt(view, line);
+    CallScintilla(view, SCI_GOTOLINE, line, 0);
+
+    centerAt(otherView, otherLine);
+    CallScintilla(otherView, SCI_GOTOLINE, otherLine, 0);
+}
+
+
 static void navigateToDiff(bool forward, bool firstLast)
 {
     if (!compareMode)
@@ -735,7 +762,6 @@ static void navigateToDiff(bool forward, bool firstLast)
 
     if (firstLast)
     {
-        // Jump to first or last diff
         if (forward)
         {
             // Last diff: search backward from end
@@ -743,16 +769,10 @@ static void navigateToDiff(bool forward, bool firstLast)
             {
                 if (isLineMarked(view, line, searchMask))
                 {
-                    // Find the beginning of this diff block
                     intptr_t blockStart = line;
                     while (blockStart > 0 && isLineMarked(view, blockStart - 1, searchMask))
                         --blockStart;
-                    centerAt(view, blockStart);
-
-                    // Sync other view
-                    intptr_t otherLine = otherViewMatchingLine(view, blockStart);
-                    if (otherLine >= 0)
-                        centerAt(getOtherViewId(view), otherLine);
+                    jumpToDiffLine(view, blockStart);
                     return;
                 }
             }
@@ -764,11 +784,7 @@ static void navigateToDiff(bool forward, bool firstLast)
             {
                 if (isLineMarked(view, line, searchMask))
                 {
-                    centerAt(view, line);
-
-                    intptr_t otherLine = otherViewMatchingLine(view, line);
-                    if (otherLine >= 0)
-                        centerAt(getOtherViewId(view), otherLine);
+                    jumpToDiffLine(view, line);
                     return;
                 }
             }
@@ -776,7 +792,6 @@ static void navigateToDiff(bool forward, bool firstLast)
     }
     else
     {
-        // Next/previous diff block
         if (forward)
         {
             // Skip current block
@@ -784,53 +799,32 @@ static void navigateToDiff(bool forward, bool firstLast)
             while (startLine < totalLines && isLineMarked(view, startLine, searchMask))
                 ++startLine;
 
-            // Find next marked line
             intptr_t nextDiff = CallScintilla(view, SCI_MARKERNEXT, startLine, searchMask);
 
             if (nextDiff < 0 && Settings.WrapAround)
-            {
-                // Wrap around
                 nextDiff = CallScintilla(view, SCI_MARKERNEXT, 0, searchMask);
-            }
 
             if (nextDiff >= 0)
-            {
-                centerAt(view, nextDiff);
-
-                intptr_t otherLine = otherViewMatchingLine(view, nextDiff);
-                if (otherLine >= 0)
-                    centerAt(getOtherViewId(view), otherLine);
-            }
+                jumpToDiffLine(view, nextDiff);
         }
         else
         {
-            // Previous diff block: search backward from before current block
             intptr_t startLine = currentLine;
 
-            // Skip current block backward
             while (startLine > 0 && isLineMarked(view, startLine, searchMask))
                 --startLine;
 
-            // Find previous marked line
             intptr_t prevDiff = CallScintilla(view, SCI_MARKERPREVIOUS, startLine, searchMask);
 
             if (prevDiff < 0 && Settings.WrapAround)
-            {
                 prevDiff = CallScintilla(view, SCI_MARKERPREVIOUS, totalLines - 1, searchMask);
-            }
 
             if (prevDiff >= 0)
             {
-                // Find the beginning of this diff block
                 intptr_t blockStart = prevDiff;
                 while (blockStart > 0 && isLineMarked(view, blockStart - 1, searchMask))
                     --blockStart;
-
-                centerAt(view, blockStart);
-
-                intptr_t otherLine = otherViewMatchingLine(view, blockStart);
-                if (otherLine >= 0)
-                    centerAt(getOtherViewId(view), otherLine);
+                jumpToDiffLine(view, blockStart);
             }
         }
     }
@@ -2629,22 +2623,24 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     MAKE_ITEM("Compare", cmdCompare, &skCompare, false);
     // 2: Compare Selections
     MAKE_ITEM("Compare Selections", cmdCompareSelections, &skCompareSel, false);
+    // --- Hidden for now (uncomment to re-enable) ---
     // 3: Find Unique Lines
-    MAKE_ITEM("Find Unique Lines", cmdFindUniqueLines, &skFindUnique, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Find Unique Lines", cmdFindUniqueLines, &skFindUnique, false);
     // 4: Find Unique Lines in Selections
-    MAKE_ITEM("Find Unique Lines in Selections", cmdFindUniqueLinesInSel, &skFindUniqueSel, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Find Unique Lines in Selections", cmdFindUniqueLinesInSel, &skFindUniqueSel, false);
     // 5: separator
     MAKE_SEPARATOR();
     // 6: Diff since last Save
-    MAKE_ITEM("Diff since last Save", cmdDiffSinceLastSave, &skDiffSinceSave, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Diff since last Save", cmdDiffSinceLastSave, &skDiffSinceSave, false);
     // 7: Compare to Clipboard
-    MAKE_ITEM("Compare file/selection to Clipboard", cmdCompareToClipboard, &skCompareClip, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Compare file/selection to Clipboard", cmdCompareToClipboard, &skCompareClip, false);
     // 8: SVN Diff
-    MAKE_ITEM("SVN Diff", cmdSVNDiff, &skSVNDiff, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("SVN Diff", cmdSVNDiff, &skSVNDiff, false);
     // 9: Git Diff
-    MAKE_ITEM("Git Diff", cmdGitDiff, &skGitDiff, false);
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Git Diff", cmdGitDiff, &skGitDiff, false);
     // 10: separator
     MAKE_SEPARATOR();
+    // --- End hidden ---
     // 11: Clear Active Compare
     MAKE_ITEM("Clear Active Compare", cmdClearActiveCompare, &skClearActive, false);
     // 12: Clear All Compares
