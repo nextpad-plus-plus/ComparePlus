@@ -975,8 +975,7 @@ void setFoldedLines(int view, const std::vector<intptr_t>& foldedLines)
 
 void moveFileToOtherView()
 {
-    // On macOS this would be handled by the host; for now send the menu command
-    nppData._sendMessage(nppData._nppHandle, NPPM_MENUCOMMAND, 0, 0 /* IDM_VIEW_GOTO_ANOTHER_VIEW */);
+    nppData._sendMessage(nppData._nppHandle, NPPM_MENUCOMMAND, 0, 10001 /* IDM_VIEW_GOTO_ANOTHER_VIEW */);
 }
 
 

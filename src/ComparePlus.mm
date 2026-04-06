@@ -89,9 +89,6 @@ static bool autoRecompareEnabled = false;
 static bool bookmarksAsSyncPoints = false;
 static bool navBarVisible = false;
 
-// "Set as First" state
-static intptr_t firstFileBufferId = -1;
-static int      firstFileViewId   = -1;
 
 // Allocated marker IDs (base offset from NPPM_ALLOCATEMARKER)
 static int markerBaseId = -1;
@@ -111,8 +108,6 @@ static bool syncingScroll = false;
 //  Keyboard shortcut definitions (static storage)
 // =====================================================================
 
-// Ctrl+Alt+1
-static ShortcutKey skSetAsFirst      = { true, true, false, false, '1' };
 // Ctrl+Alt+C
 static ShortcutKey skCompare         = { true, true, false, false, 'C' };
 // Ctrl+Alt+N
@@ -149,7 +144,6 @@ static ShortcutKey skNextChangedLine = { true, true, true, false, 0x22 };
 //  Forward declarations  --  menu command callbacks
 // =====================================================================
 
-static void cmdSetAsFirst();
 static void cmdCompare();
 static void cmdCompareSelections();
 static void cmdFindUniqueLines();
@@ -413,6 +407,34 @@ static void alignDiffs()
 
 
 // =====================================================================
+//  IDM constants for NPPM_MENUCOMMAND
+// =====================================================================
+
+// =====================================================================
+//  Host action helper — get the window controller and call a selector.
+// =====================================================================
+
+static id getHostController()
+{
+    NSWindow *w = [NSApp mainWindow];
+    if (!w) w = [NSApp keyWindow];
+    if (!w) w = [[NSApp orderedWindows] firstObject];
+    return w ? [w windowController] : nil;
+}
+
+static void hostAction(SEL sel)
+{
+    id wc = getHostController();
+    if (wc && [wc respondsToSelector:sel]) {
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [wc performSelector:sel withObject:nil];
+        #pragma clang diagnostic pop
+    }
+}
+
+
+// =====================================================================
 //  Core compare implementation
 // =====================================================================
 
@@ -420,36 +442,31 @@ static void doCompare(bool selectionOnly, bool findUniqueMode)
 {
     @autoreleasepool {
 
+    // Step 1: Move active tab to Other Vertical View
+    hostAction(@selector(moveToOtherVerticalView:));
+
+    // Step 2: Turn on Synchronize Vertical Scrolling
+    hostAction(@selector(toggleSyncVerticalScrolling:));
+
+    // Step 3: Run the compare
     int currentViewId = getCurrentViewId();
 
-    // Check that we have two views to compare
     int view1 = MAIN_VIEW;
     int view2 = SUB_VIEW;
 
-    // If "Set as First" was used, that determines view assignment
-    if (firstFileBufferId >= 0)
+    int filesInMain = getNumberOfFiles(MAIN_VIEW);
+    int filesInSub  = getNumberOfFiles(SUB_VIEW);
+
+    if (filesInMain == 0 || filesInSub == 0)
     {
-        view1 = firstFileViewId;
-        view2 = getOtherViewId(view1);
-        firstFileBufferId = -1;  // consume it
+        showMessage(@"ComparePlus", @"Two files are needed to compare.");
+        return;
     }
 
     // Verify both views have content
     if (isFileEmpty(view1) && isFileEmpty(view2))
     {
         showMessage(@"ComparePlus", @"Both files are empty, nothing to compare.");
-        return;
-    }
-
-    // Check if files are in both views
-    int filesInMain = getNumberOfFiles(MAIN_VIEW);
-    int filesInSub  = getNumberOfFiles(SUB_VIEW);
-
-    if (filesInMain == 0 || filesInSub == 0)
-    {
-        showMessage(@"ComparePlus",
-            @"Two files are needed to compare.\n\n"
-            @"Move a file to the other view first (View > Move/Clone Current Document).");
         return;
     }
 
@@ -660,15 +677,13 @@ static void clearCompare(int view)
 
 static void clearAllCompares()
 {
-    if (!compareMode && firstFileBufferId < 0)
+    if (!compareMode)
         return;
 
     clearCompare(MAIN_VIEW);
     clearCompare(SUB_VIEW);
 
     compareMode = false;
-    firstFileBufferId = -1;
-    firstFileViewId = -1;
     compareBuffIds[0] = -1;
     compareBuffIds[1] = -1;
     activeSummary.clear();
@@ -1279,22 +1294,6 @@ static void doCompareToClipboard()
 //  Menu command callbacks
 // =====================================================================
 
-static void cmdSetAsFirst()
-{
-    int view = getCurrentViewId();
-    firstFileBufferId = getCurrentBuffId();
-    firstFileViewId = view;
-
-    std::string path = getFilePath(firstFileBufferId);
-    NSString* name = @"(untitled)";
-    if (!path.empty())
-    {
-        name = [[NSString stringWithUTF8String:path.c_str()] lastPathComponent];
-    }
-
-    nppData._sendMessage(nppData._nppHandle, NPPM_SETSTATUSBAR, STATUSBAR_DOC_TYPE,
-        (intptr_t)[[NSString stringWithFormat:@"Set as first: %@", name] UTF8String]);
-}
 
 
 static void cmdCompare()
@@ -1364,23 +1363,22 @@ static void cmdGitDiff()
 static void cmdClearActiveCompare()
 {
     if (!compareMode)
-    {
-        if (firstFileBufferId >= 0)
-        {
-            firstFileBufferId = -1;
-            firstFileViewId = -1;
-            nppData._sendMessage(nppData._nppHandle, NPPM_SETSTATUSBAR, STATUSBAR_DOC_TYPE, (intptr_t)"");
-        }
         return;
-    }
 
+    // Step 1: Clear all compare markers and annotations
     clearAllCompares();
+
+    // Step 2: Reset View — moves all secondary tabs back, collapses split
+    hostAction(@selector(resetView:));
+
+    // Step 3: Turn off vertical scroll sync
+    hostAction(@selector(toggleSyncVerticalScrolling:));
 }
 
 
 static void cmdClearAllCompares()
 {
-    clearAllCompares();
+    cmdClearActiveCompare();
 }
 
 
@@ -2603,8 +2601,8 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
         idx++; \
     } while(0)
 
-    // 0: Set as First to Compare
-    MAKE_ITEM("Set as First to Compare", cmdSetAsFirst, &skSetAsFirst, false);
+    // 0: (placeholder — keeps toolbar button indices stable)
+    MAKE_SEPARATOR();
     // 1: Compare
     MAKE_ITEM("Compare", cmdCompare, &skCompare, false);
     // 2: Compare Selections
