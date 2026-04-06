@@ -2732,8 +2732,8 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     MAKE_ITEM("Diffs Visual Filters...", cmdDiffsVisualFilters, nullptr, false);
     // 30: separator
     MAKE_SEPARATOR();
-    // 31: Navigation Bar
-    MAKE_ITEM("Navigation Bar", cmdNavigationBar, nullptr, false);
+    // 31: Navigation Bar (hidden for now — uncomment to re-enable)
+    MAKE_SEPARATOR(); // was: MAKE_ITEM("Navigation Bar", cmdNavigationBar, nullptr, false);
     // 32: Auto Re-Compare on Change
     MAKE_ITEM("Auto Re-Compare on Change", cmdAutoRecompare, nullptr, false);
     // 33: separator
