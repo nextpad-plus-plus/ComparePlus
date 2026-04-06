@@ -177,7 +177,7 @@ static void cmdHelpAbout();
 //  Forward declarations  --  internal helpers
 // =====================================================================
 
-static void doCompare(bool selectionOnly, bool findUniqueMode);
+static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup = false);
 static void clearCompare(int view);
 static void clearAllCompares();
 static void navigateToDiff(bool forward, bool firstLast);
@@ -434,41 +434,48 @@ static void hostAction(SEL sel)
 }
 
 
+// Pre-captured selection lines for selection compare (set before doCompare)
+static std::pair<intptr_t, intptr_t> savedSelectionMain = {-1, -1};
+static std::pair<intptr_t, intptr_t> savedSelectionSub  = {-1, -1};
+
+
 // =====================================================================
 //  Core compare implementation
 // =====================================================================
 
-static void doCompare(bool selectionOnly, bool findUniqueMode)
+static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
 {
     @autoreleasepool {
 
-    // Check that at least 2 files are open.
-    // Query the host's tab managers directly via the window controller.
-    id wc = getHostController();
-    if (wc)
+    if (!skipSetup)
     {
-        int count = 0;
-        @try {
-            id primaryTM = [wc valueForKey:@"_tabManager"];
-            id subTMV    = [wc valueForKey:@"_subTabManagerV"];
-            if (primaryTM)
-                count += [[primaryTM valueForKey:@"allEditors"] count];
-            if (subTMV)
-                count += [[subTMV valueForKey:@"allEditors"] count];
-        } @catch (...) {}
-
-        if (count < 2)
+        // Check that at least 2 files are open.
+        id wc = getHostController();
+        if (wc)
         {
-            showMessage(@"ComparePlus", @"You should have at least 2 open files to compare.");
-            return;
+            int count = 0;
+            @try {
+                id primaryTM = [wc valueForKey:@"_tabManager"];
+                id subTMV    = [wc valueForKey:@"_subTabManagerV"];
+                if (primaryTM)
+                    count += [[primaryTM valueForKey:@"allEditors"] count];
+                if (subTMV)
+                    count += [[subTMV valueForKey:@"allEditors"] count];
+            } @catch (...) {}
+
+            if (count < 2)
+            {
+                showMessage(@"ComparePlus", @"You should have at least 2 open files to compare.");
+                return;
+            }
         }
+
+        // Step 1: Move active tab to Other Vertical View
+        hostAction(@selector(moveToOtherVerticalView:));
+
+        // Step 2: Turn on Synchronize Vertical Scrolling
+        hostAction(@selector(toggleSyncVerticalScrolling:));
     }
-
-    // Step 1: Move active tab to Other Vertical View
-    hostAction(@selector(moveToOtherVerticalView:));
-
-    // Step 2: Turn on Synchronize Vertical Scrolling
-    hostAction(@selector(toggleSyncVerticalScrolling:));
 
     // Step 3: Run the compare
     int currentViewId = getCurrentViewId();
@@ -540,11 +547,18 @@ static void doCompare(bool selectionOnly, bool findUniqueMode)
 
     if (selectionOnly)
     {
-        // Get selection ranges in both views
-        auto sel1 = getSelectionLines(view1);
-        auto sel2 = getSelectionLines(view2);
-        options.selections[view1] = sel1;
-        options.selections[view2] = sel2;
+        // Use pre-captured selections if available (set by cmdCompareSelections
+        // before the tab move), otherwise read from views directly.
+        if (savedSelectionMain.first >= 0 && savedSelectionSub.first >= 0)
+        {
+            options.selections[MAIN_VIEW] = savedSelectionMain;
+            options.selections[SUB_VIEW]  = savedSelectionSub;
+        }
+        else
+        {
+            options.selections[view1] = getSelectionLines(view1);
+            options.selections[view2] = getSelectionLines(view2);
+        }
     }
 
     // Set up ignore regex if configured
@@ -634,6 +648,13 @@ static void doCompare(bool selectionOnly, bool findUniqueMode)
 
     // Insert alignment blank annotations so diff blocks line up visually
     alignDiffs();
+
+    // Hide lines outside selection range for selection compare
+    if (selectionOnly)
+    {
+        hideLinesOutsideRange(view1, options.selections[view1].first, options.selections[view1].second);
+        hideLinesOutsideRange(view2, options.selections[view2].first, options.selections[view2].second);
+    }
 
     // Apply visual filters
     if (Settings.HideMatches)
@@ -1320,15 +1341,45 @@ static void cmdCompare()
 
 static void cmdCompareSelections()
 {
+    // The active tab has a selection. Capture LINE NUMBERS before the move.
     int view = getCurrentViewId();
-    int otherView = getOtherViewId(view);
 
-    if (!isSelection(view) || !isSelection(otherView))
+    if (!isSelection(view))
     {
-        showMessage(@"ComparePlus", @"Please select text in both views to compare selections.");
+        showMessage(@"ComparePlus", @"Please select text in both files to compare selections.");
         return;
     }
-    doCompare(true, false);
+
+    // Capture active tab's selection as line numbers (this tab will become SUB_VIEW)
+    auto movedSel = getSelectionLines(view);
+
+    // Move active tab to split view
+    hostAction(@selector(moveToOtherVerticalView:));
+
+    // Now the other file is active in MAIN_VIEW. Check it has a selection.
+    if (!isSelection(MAIN_VIEW))
+    {
+        showMessage(@"ComparePlus", @"Please select text in both files to compare selections.");
+        hostAction(@selector(resetView:));
+        return;
+    }
+
+    // Capture the remaining tab's selection (now in MAIN_VIEW)
+    auto mainSel = getSelectionLines(MAIN_VIEW);
+
+    // Store pre-captured selections so doCompare uses them instead of re-reading
+    savedSelectionMain = mainSel;
+    savedSelectionSub  = movedSel;
+
+    // Turn on sync scrolling
+    hostAction(@selector(toggleSyncVerticalScrolling:));
+
+    // Run compare in selection mode — skip the move/sync (already done above)
+    doCompare(true, false, true);
+
+    // Clear saved selections
+    savedSelectionMain = {-1, -1};
+    savedSelectionSub  = {-1, -1};
 }
 
 
