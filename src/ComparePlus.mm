@@ -472,12 +472,9 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
 
         // Step 1: Move active tab to Other Vertical View
         hostAction(@selector(moveToOtherVerticalView:));
-
-        // Step 2: Turn on Synchronize Vertical Scrolling
-        hostAction(@selector(toggleSyncVerticalScrolling:));
     }
 
-    // Step 3: Run the compare
+    // Step 2: Run the compare
     int currentViewId = getCurrentViewId();
 
     int view1 = MAIN_VIEW;
@@ -698,7 +695,10 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
     if (Settings.GotoFirstDiff)
         cmdFirstDiffBlock();
 
-    // Sync scroll positions
+    // Step 3: Enable scroll sync AFTER compare and alignment are complete
+    hostAction(@selector(enableSyncScrolling:));
+
+    // Sync initial scroll positions
     intptr_t firstLine = getFirstVisibleLine(currentViewId);
     CallScintilla(getOtherViewId(currentViewId), SCI_SETFIRSTVISIBLELINE, firstLine, 0);
 
@@ -1371,10 +1371,8 @@ static void cmdCompareSelections()
     savedSelectionMain = mainSel;
     savedSelectionSub  = movedSel;
 
-    // Turn on sync scrolling
-    hostAction(@selector(toggleSyncVerticalScrolling:));
-
-    // Run compare in selection mode — skip the move/sync (already done above)
+    // Run compare in selection mode — skip the move (already done above)
+    // Sync scrolling is enabled by doCompare after alignment completes
     doCompare(true, false, true);
 
     // Clear saved selections
@@ -1435,11 +1433,11 @@ static void cmdClearActiveCompare()
     // Step 1: Clear all compare markers and annotations
     clearAllCompares();
 
-    // Step 2: Reset View — moves all secondary tabs back, collapses split
-    hostAction(@selector(resetView:));
+    // Step 2: Turn off scroll sync explicitly (before reset collapses the split)
+    hostAction(@selector(disableSyncScrolling:));
 
-    // Step 3: Turn off vertical scroll sync
-    hostAction(@selector(toggleSyncVerticalScrolling:));
+    // Step 3: Reset View — moves all secondary tabs back, collapses split
+    hostAction(@selector(resetView:));
 }
 
 

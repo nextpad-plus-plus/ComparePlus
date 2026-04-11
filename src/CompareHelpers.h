@@ -121,14 +121,8 @@ extern int gMarginWidth;
 //  Routes SCI_* messages through the macOS plugin API.
 // =====================================================================
 
-inline intptr_t CallScintilla(int viewNum, unsigned int uMsg, uintptr_t wParam, intptr_t lParam)
-{
-    assert(viewNum >= 0 && viewNum < 2);
-
-    NppHandle h = (viewNum == 0) ? nppData._scintillaMainHandle
-                                 : nppData._scintillaSecondHandle;
-    return nppData._sendMessage(h, uMsg, wParam, lParam);
-}
+// Defined in EngineBridge.mm (not inline — must be a real symbol for Engine.cpp linkage)
+intptr_t CallScintilla(int viewNum, unsigned int uMsg, uintptr_t wParam, intptr_t lParam);
 
 
 // =====================================================================

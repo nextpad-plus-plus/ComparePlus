@@ -16,6 +16,13 @@ static inline intptr_t sci(int viewNum, unsigned int uMsg, uintptr_t wParam = 0,
     return nppData._sendMessage(h, uMsg, wParam, lParam);
 }
 
+// --- CallScintilla (used by CompareHelpers.h and Engine.cpp) ---
+
+intptr_t CallScintilla(int viewNum, unsigned int uMsg, uintptr_t wParam, intptr_t lParam)
+{
+    return sci(viewNum, uMsg, wParam, lParam);
+}
+
 // --- Functions declared extern in Engine.cpp ---
 
 intptr_t getLineStart(int view, intptr_t line)
