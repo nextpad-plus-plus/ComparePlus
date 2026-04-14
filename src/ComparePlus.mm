@@ -23,6 +23,17 @@
 #include "NppPluginInterfaceMac.h"
 #include "Scintilla.h"
 
+// Fallback definitions for NPPM_SETPLUGINSUBSCRIPTIONS (macOS-specific
+// extension added in host v1.0.2). If the plugin is built against an
+// older NppPluginInterfaceMac.h that predates this message, we still
+// compile — the call at runtime falls through to the host's default
+// case and returns 0 (harmless no-op on old hosts).
+#ifndef NPPM_SETPLUGINSUBSCRIPTIONS
+#  define NPPM_SETPLUGINSUBSCRIPTIONS      (NPPMSG + 500)
+#  define NPPPLUGIN_WANTS_UPDATEUI         (1U << 0)
+#  define NPPPLUGIN_WANTS_PAINTED          (1U << 1)
+#endif
+
 #include "CompareHelpers.h"
 #include "CompareSettings.h"
 #include "Engine/Engine.h"
@@ -2462,6 +2473,29 @@ static void showAboutDialog()
 static void handleReady()
 {
     pluginReady = true;
+
+    // macOS: opt out of SCN_UPDATEUI and SCN_PAINTED forwarding.
+    //
+    // On Windows, ComparePlus drives scroll sync between compared panes
+    // via its own handleUpdateUI → syncScrollPositions path. On macOS,
+    // the host has a 60Hz timer-based scroll sync that we engage via
+    // enableSyncScrolling: during compare mode (see doCompare), and the
+    // plugin's Windows-style sync would fight that timer — causing the
+    // secondary pane to snap back whenever the user tries to scroll it.
+    //
+    // By opting out of SCN_UPDATEUI here, our handleUpdateUI stops firing
+    // and the host's timer becomes the sole scroll-sync mechanism.
+    // SCN_MODIFIED (for auto-recompare) is NOT affected — it's a separate
+    // subscription bit and stays on.
+    //
+    // Older hosts that don't recognize NPPM_SETPLUGINSUBSCRIPTIONS return
+    // 0 from sendMessage. That's fine — on those hosts SCN_UPDATEUI was
+    // never forwarded to plugins in the first place, so our handler was
+    // already dead.
+    nppData._sendMessage(nppData._nppHandle,
+                         NPPM_SETPLUGINSUBSCRIPTIONS,
+                         0,                          // wParam: empty mask
+                         (intptr_t)PLUGIN_NAME);     // lParam: module name
 
     // Load settings
     Settings.load();
