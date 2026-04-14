@@ -1657,17 +1657,33 @@ static void cmdHelpAbout()
 static void updateMenuChecks()
 {
     // Menu item indices for checkmark items
-    // 28 = Bookmarks as Sync (index 28 in funcItem)
-    // 31 = Navigation Bar (index 31)
-    // 32 = Auto Re-Compare (index 32)
+    //   28 = Use Bookmarks as Manual Sync Points   (real item)
+    //   31 = Navigation Bar                        (currently a SEPARATOR)
+    //   32 = Auto Re-Compare on Change             (currently a SEPARATOR)
+    //
+    // Indices 31 and 32 are MAKE_SEPARATOR placeholders right now because
+    // the Navigation Bar and Auto Re-Compare features are hidden until
+    // they land. When they become real menu items again, the calls below
+    // will start sending again automatically thanks to the _pFunc guard.
+    //
+    // Never call NPPM_SETMENUITEMCHECK with a separator slot's _cmdID —
+    // the host doesn't allocate cmdIDs to separators (they stay at 0),
+    // and on the host side findMenuItemWithTag:0 would previously walk
+    // the entire plugins menu and match the first NSMenuItem with the
+    // default-zero tag (typically "MIME Tools"), causing a spurious
+    // checkmark to appear on an unrelated static submenu.
+    auto setCheck = [&](int idx, bool checked) {
+        if (idx < 0 || idx >= NB_MENU_COMMANDS) return;
+        if (!funcItem[idx]._pFunc) return;     // separator — no cmdID allocated
+        if (funcItem[idx]._cmdID == 0) return; // defensive: unallocated slot
+        nppData._sendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK,
+                             (uintptr_t)funcItem[idx]._cmdID,
+                             checked ? 1 : 0);
+    };
 
-    // These cmdIDs are assigned by the host at load time
-    nppData._sendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK,
-        funcItem[28]._cmdID, bookmarksAsSyncPoints ? 1 : 0);
-    nppData._sendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK,
-        funcItem[31]._cmdID, navBarVisible ? 1 : 0);
-    nppData._sendMessage(nppData._nppHandle, NPPM_SETMENUITEMCHECK,
-        funcItem[32]._cmdID, autoRecompareEnabled ? 1 : 0);
+    setCheck(28, bookmarksAsSyncPoints);
+    setCheck(31, navBarVisible);
+    setCheck(32, autoRecompareEnabled);
 }
 
 
