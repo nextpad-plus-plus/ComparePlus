@@ -46,3 +46,13 @@ set_target_properties(ComparePlus PROPERTIES
 # Install target
 set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/ComparePlus")
 install(TARGETS ComparePlus DESTINATION "${PLUGIN_INSTALL_DIR}")
+
+# Toolbar icons. The plugin source passes bare filenames (e.g.
+# "Compare.png") to NPPM_ADDTOOLBARICON_FORDARKMODE, so the host
+# resolves them relative to the plugin's install directory. Install
+# both light and dark sets flat at the plugin root; the host picks
+# the matching variant based on macOS appearance.
+file(GLOB COMPAREPLUS_LIGHT_ICONS "${CMAKE_SOURCE_DIR}/res/icons/light/*.png")
+file(GLOB COMPAREPLUS_DARK_ICONS  "${CMAKE_SOURCE_DIR}/res/icons/dark/*.png")
+install(FILES ${COMPAREPLUS_LIGHT_ICONS} ${COMPAREPLUS_DARK_ICONS}
+        DESTINATION "${PLUGIN_INSTALL_DIR}")
