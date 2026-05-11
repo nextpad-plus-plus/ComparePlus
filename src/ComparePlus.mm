@@ -2546,7 +2546,7 @@ static void registerToolbarIcon(int funcIdx, const char *iconFile)
 static void handleToolbarModification()
 {
     // Register toolbar icons — filenames are relative to the plugin directory.
-    // The host looks in ~/.notepad++/plugins/ComparePlus/{iconFile}
+    // The host looks in ~/.nextpad++/plugins/ComparePlus/{iconFile}
     if (Settings.EnableToolbar) {
         if (Settings.CompareTB)       registerToolbarIcon(1,  "Compare.png");         // Compare
         if (Settings.CompareSelTB)    registerToolbarIcon(2,  "CompareLines.png");    // Compare Selections

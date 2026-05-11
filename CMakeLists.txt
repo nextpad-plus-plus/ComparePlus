@@ -44,7 +44,7 @@ set_target_properties(ComparePlus PROPERTIES
 )
 
 # Install target
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/ComparePlus")
+set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.nextpad++/plugins/ComparePlus")
 install(TARGETS ComparePlus DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # Toolbar icons. The plugin source passes bare filenames (e.g.

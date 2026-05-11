@@ -137,7 +137,7 @@ static std::string configFilePath()
         // Fallback
         const char* home = getenv("HOME");
         if (home)
-            path = std::string(home) + "/.notepad++/plugins/Config";
+            path = std::string(home) + "/.nextpad++/plugins/Config";
     }
     path += "/ComparePlus.json";
     return path;

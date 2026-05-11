@@ -112,7 +112,7 @@ struct ColorSettings
 //  UserSettings — all persistent plugin settings
 //
 //  On macOS the config is stored as JSON in:
-//      ~/.notepad++/plugins/Config/ComparePlus.json
+//      ~/.nextpad++/plugins/Config/ComparePlus.json
 //  rather than a Windows INI file.
 // =====================================================================
 
