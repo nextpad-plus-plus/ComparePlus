@@ -59,7 +59,7 @@
 // =====================================================================
 
 static const char* PLUGIN_NAME = "ComparePlus";
-static const char* PLUGIN_VERSION = "1.0.0";
+static const char* PLUGIN_VERSION = "1.0.3";
 
 
 // =====================================================================
@@ -113,6 +113,14 @@ static bool recompareNeeded = false;
 
 // Reentrancy guard for scroll sync
 static bool syncingScroll = false;
+
+// Saved SCI_GETSCROLLWIDTHTRACKING state for [MAIN_VIEW]/[SUB_VIEW], captured at
+// compare start and restored on clear (host-regression hardening — see doCompare).
+static int savedScrollWidthTracking[2] = { -1, -1 };
+
+// Saved user "Mouse wheel scroll speed" gain, suspended during compare (see doCompare).
+static id   savedScrollSpeedGain      = nil;   // NSNumber*, or nil if it was unset
+static BOOL scrollSpeedGainOverridden = NO;
 
 
 // =====================================================================
@@ -427,6 +435,20 @@ static void alignDiffs()
 
 static id getHostController()
 {
+    // Resolve the host's MainWindowController — the controller that owns the
+    // editor tab managers. A panel or the Preferences window (a titled NSWindow)
+    // can be [NSApp mainWindow]/keyWindow, and its controller has no _tabManager,
+    // which would make file-count / KVC lookups silently fail. Prefer the window
+    // whose controller actually exposes _tabManager.
+    for (NSWindow *win in [NSApp windows]) {
+        id wc = [win windowController];
+        if (!wc) continue;
+        @try {
+            if ([wc valueForKey:@"_tabManager"] != nil)
+                return wc;
+        } @catch (...) { /* not the editor controller — keep looking */ }
+    }
+    // Fallback to the previous heuristic.
     NSWindow *w = [NSApp mainWindow];
     if (!w) w = [NSApp keyWindow];
     if (!w) w = [[NSApp orderedWindows] firstObject];
@@ -481,8 +503,15 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
             }
         }
 
-        // Step 1: Move active tab to Other Vertical View
-        hostAction(@selector(moveToOtherVerticalView:));
+        // Step 1: Ensure a vertical split with one document per view.
+        // moveToOtherVerticalView: is a TOGGLE in the host: invoking it when a
+        // split already exists moves the active document BACK to primary and
+        // empties the sub view. Since host v1.0.7 NPPM_GETNBOPENFILES reports
+        // real per-view counts (it used to always return 1), an emptied view
+        // makes the guard below fire a bogus "Two files are needed" error.
+        // Only perform the split when the sub view is currently empty.
+        if (getNumberOfFiles(SUB_VIEW) == 0)
+            hostAction(@selector(moveToOtherVerticalView:));
     }
 
     // Step 2: Run the compare
@@ -602,6 +631,25 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
         }
     }
 
+    // Derive the blank-filler color BEFORE setCompareView consumes it. setStyles()
+    // (called a few lines below) is what normally computes Settings.colors().blank
+    // from the editor's STYLE_DEFAULT background — but it runs AFTER these
+    // setCompareView() calls, so on the first compare of a session the filler
+    // annotation gets painted with the still-zero blank color (black). On later
+    // compares the value is already cached, hence "black first time, grey after".
+    // Compute it up front here (identical derivation to setStyles) so the very
+    // first compare is correct; setStyles() recomputes the same value below.
+    {
+        int bg = static_cast<int>(CallScintilla(MAIN_VIEW, SCI_STYLEGETBACK, STYLE_DEFAULT, 0));
+        if (bg == 0) bg = 0xFFFFFF; // fallback to white if unavailable
+        constexpr int colorShift = 20;
+        int br = bg & 0xFF, bgc = (bg >> 8) & 0xFF, bb = (bg >> 16) & 0xFF;
+        br  = (br  > colorShift) ? (br  - colorShift) & 0xFF : 0;
+        bgc = (bgc > colorShift) ? (bgc - colorShift) & 0xFF : 0;
+        bb  = (bb  > colorShift) ? (bb  - colorShift) & 0xFF : 0;
+        Settings.colors().blank = br | (bgc << 8) | (bb << 16);
+    }
+
     // Set up compare view styling
     setCompareView(view1, !Settings.HideMargin, Settings.colors().blank,
                    Settings.colors().caret_line_transparency);
@@ -706,6 +754,32 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
     if (Settings.GotoFirstDiff)
         cmdFirstDiffBlock();
 
+    // Hardening for a host v1.0.7 change: the host turns on
+    // SCI_SETSCROLLWIDTHTRACKING for every editor. In compare mode the two panes
+    // have very different, alignment-shifted line widths, so scrolling constantly
+    // re-triggers Scintilla's scroll-range recompute (SetScrollBars -> Cocoa
+    // SetScrollingSize -> SetVerticalScrollPos), which repositions the viewport
+    // mid-scroll and snaps both panes to the top when the gesture ends. Turn width
+    // tracking off on both compared views for the duration of the compare; the
+    // saved state is restored in clearAllCompares().
+    for (int v = MAIN_VIEW; v <= SUB_VIEW; ++v) {
+        savedScrollWidthTracking[v] = (int)CallScintilla(v, SCI_GETSCROLLWIDTHTRACKING, 0, 0);
+        CallScintilla(v, SCI_SETSCROLLWIDTHTRACKING, 0, 0);
+    }
+
+    // Suspend the host's mouse-wheel scroll speedup (Prefs > Misc) while comparing.
+    // With a gain > 1 the host accelerates discrete-wheel scrolling in
+    // SCIContentView.adjustScroll:; that path also runs for the OTHER pane's
+    // programmatic sync-scroll (NSApp.currentEvent is still the user's wheel event),
+    // so the two panes accelerate differently and jump. Force gain 1.0 for the
+    // duration of the compare; restored in clearAllCompares().
+    if (!scrollSpeedGainOverridden) {
+        NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+        savedScrollSpeedGain = [ud objectForKey:@"scrollSpeedGain"];
+        [ud setObject:@1.0 forKey:@"scrollSpeedGain"];
+        scrollSpeedGainOverridden = YES;
+    }
+
     // Step 3: Enable scroll sync AFTER compare and alignment are complete
     hostAction(@selector(enableSyncScrolling:));
 
@@ -736,6 +810,25 @@ static void clearAllCompares()
 
     clearCompare(MAIN_VIEW);
     clearCompare(SUB_VIEW);
+
+    // Restore scroll-width tracking disabled in doCompare (host-regression hardening).
+    for (int v = MAIN_VIEW; v <= SUB_VIEW; ++v) {
+        if (savedScrollWidthTracking[v] >= 0) {
+            CallScintilla(v, SCI_SETSCROLLWIDTHTRACKING, (uintptr_t)savedScrollWidthTracking[v], 0);
+            savedScrollWidthTracking[v] = -1;
+        }
+    }
+
+    // Restore the mouse-wheel scroll speedup suspended in doCompare.
+    if (scrollSpeedGainOverridden) {
+        NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+        if (savedScrollSpeedGain)
+            [ud setObject:savedScrollSpeedGain forKey:@"scrollSpeedGain"];
+        else
+            [ud removeObjectForKey:@"scrollSpeedGain"];
+        savedScrollSpeedGain = nil;
+        scrollSpeedGainOverridden = NO;
+    }
 
     compareMode = false;
     compareBuffIds[0] = -1;
@@ -2626,9 +2719,16 @@ static void handleUpdateUI(NppHandle viewHandle)
 }
 
 
-static void handleModified(NppHandle viewHandle)
+static void handleModified(NppHandle viewHandle, int modificationType)
 {
     if (!compareMode || !autoRecompareEnabled)
+        return;
+
+    // Only real text edits should schedule a recompare. Re-applying editor
+    // settings (e.g. changing a Preference) fires SCN_MODIFIED with style/marker
+    // flags only; recompiling on those is wrong and — while the Preferences
+    // window is frontmost — surfaces a spurious "2 open files" dialog.
+    if (!(modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)))
         return;
 
     int view = getViewIdSafe(viewHandle);
@@ -2678,7 +2778,11 @@ static void scheduleRecompareCheck()
             if (savedBuffs[1] >= 0)
                 activateBufferID(savedBuffs[1]);
 
-            doCompare(false, false);
+            // skipSetup = true: the split already exists, so don't re-run the
+            // "2 open files" check or the move-to-other-view toggle (the former
+            // mis-fires when the Preferences window is frontmost — see
+            // getHostController).
+            doCompare(false, false, /*skipSetup=*/true);
         }
 
         // Re-schedule
@@ -2867,7 +2971,7 @@ extern "C" NPP_EXPORT void beNotified(SCNotification* notifyCode)
             break;
 
         case SCN_MODIFIED:
-            handleModified(hwndFrom);
+            handleModified(hwndFrom, (int)notifyCode->modificationType);
             break;
 
         default:
