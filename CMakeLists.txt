@@ -19,6 +19,7 @@ add_library(ComparePlus SHARED
     src/CompareHelpers.mm
     src/CompareTools.mm
     src/EngineBridge.mm
+    src/NavBarPanel.mm
 )
 
 target_include_directories(ComparePlus PRIVATE

@@ -36,6 +36,7 @@
 
 #include "CompareHelpers.h"
 #include "CompareSettings.h"
+#include "NavBarPanel.h"
 #include "Engine/Engine.h"
 #include "Engine/diff.h"
 #include "Engine/diff_types.h"
@@ -99,6 +100,13 @@ static bool scrollSyncEnabled = true;
 static bool autoRecompareEnabled = false;
 static bool bookmarksAsSyncPoints = false;
 static bool navBarVisible = false;
+
+// Build the NavBar diff colors from the active theme's color settings.
+static NavBar::Colors navBarColors()
+{
+    ColorSettings& c = Settings.colors();
+    return NavBar::Colors{ c.added, c.removed, c.changed, c.moved, c._default };
+}
 
 
 // Allocated marker IDs (base offset from NPPM_ALLOCATEMARKER)
@@ -787,6 +795,10 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
     intptr_t firstLine = getFirstVisibleLine(currentViewId);
     CallScintilla(getOtherViewId(currentViewId), SCI_SETFIRSTVISIBLELINE, firstLine, 0);
 
+    // Show / refresh the Navigation Bar diff map (rebuilds on every (re)compare).
+    if (Settings.ShowNavBar)
+        NavBar::Show(navBarColors());
+
     } // @autoreleasepool
 }
 
@@ -810,6 +822,8 @@ static void clearAllCompares()
 
     clearCompare(MAIN_VIEW);
     clearCompare(SUB_VIEW);
+
+    NavBar::Hide();
 
     // Restore scroll-width tracking disabled in doCompare (host-regression hardening).
     for (int v = MAIN_VIEW; v <= SUB_VIEW; ++v) {
@@ -1718,6 +1732,18 @@ static void cmdNavigationBar()
     navBarVisible = !navBarVisible;
     Settings.ShowNavBar = navBarVisible;
     Settings.markAsDirty();
+
+    if (navBarVisible)
+    {
+        // Only meaningful during an active compare (two aligned views).
+        if (compareMode)
+            NavBar::Show(navBarColors());
+    }
+    else
+    {
+        NavBar::Hide();
+    }
+
     updateMenuChecks();
 }
 
@@ -2651,12 +2677,14 @@ static void handleToolbarModification()
             registerToolbarIcon(17, "Last.png");       // Last Diff
         }
         if (Settings.DiffsFilterTB)   registerToolbarIcon(29, "DiffsFilters.png");   // Visual Filters
+        if (Settings.NavBarTB)        registerToolbarIcon(31, "NavBar.png");        // Navigation Bar
     }
 }
 
 
 static void handleShutdown()
 {
+    NavBar::Shutdown();
     Settings.save();
     pluginReady = false;
 }
@@ -2751,6 +2779,10 @@ static void handleDarkModeChanged()
 
     if (compareMode)
         setStyles(Settings);
+
+    // Re-render the NavBar with the new theme colors.
+    if (NavBar::IsVisible())
+        NavBar::Refresh(navBarColors());
 }
 
 
@@ -2884,8 +2916,8 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     MAKE_ITEM("Diffs Visual Filters...", cmdDiffsVisualFilters, nullptr, false);
     // 30: separator
     MAKE_SEPARATOR();
-    // 31: Navigation Bar (hidden for now — uncomment to re-enable)
-    MAKE_SEPARATOR(); // was: MAKE_ITEM("Navigation Bar", cmdNavigationBar, nullptr, false);
+    // 31: Navigation Bar
+    MAKE_ITEM("Navigation Bar", cmdNavigationBar, nullptr, false);
     // 32: Auto Re-Compare on Change (hidden for now — uncomment to re-enable)
     MAKE_SEPARATOR(); // was: MAKE_ITEM("Auto Re-Compare on Change", cmdAutoRecompare, nullptr, false);
     // 33: separator
