@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(ComparePlus LANGUAGES CXX OBJCXX)
+# Keep PROJECT_VERSION in sync with PLUGIN_VERSION in src/ComparePlus.mm — it is
+# stamped into the dylib's Mach-O current_version (see target_link_options below).
+project(ComparePlus VERSION 1.0.4 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OBJCXX_STANDARD 17)
@@ -42,6 +44,14 @@ set_target_properties(ComparePlus PROPERTIES
     PREFIX ""
     SUFFIX ".dylib"
     OUTPUT_NAME "ComparePlus"
+)
+
+# Stamp the version X.Y.Z into the Mach-O LC_ID_DYLIB current_version (visible
+# via `otool -L`). Done with explicit linker flags rather than the target
+# VERSION property so the output filename stays exactly "ComparePlus.dylib".
+target_link_options(ComparePlus PRIVATE
+    "-Wl,-current_version,${PROJECT_VERSION}"
+    "-Wl,-compatibility_version,1.0.0"
 )
 
 # Install target
