@@ -41,8 +41,10 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
 @public
     NavBar::Colors    _colors;
     std::vector<int>  _rows[2];     // resolved Scintilla color per pixel-row, per view
+    int               _usedRows[2]; // drawn column height in px (shared-scale; shorter file is shorter)
     intptr_t          _lineCount[2];
-    int               _builtRows;   // pixel-row count the cache was built for
+    double            _scale;       // shared pixels-per-line (== Windows m_pixelsPerLine)
+    int               _builtRows;   // contentRows the cache was built for
     bool              _dirty;
 }
 @end
@@ -55,6 +57,8 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
     {
         _colors      = {0xC6FFC6, 0xC6C6FF, 0x98E7E7, 0xFFE6CC, 0xFFFFFF};
         _lineCount[0] = _lineCount[1] = 0;
+        _usedRows[0]  = _usedRows[1]  = 0;
+        _scale       = 0.0;
         _builtRows   = 0;
         _dirty       = true;
     }
@@ -78,16 +82,33 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
     int bg = h0 ? (int)CallScintilla(MAIN_VIEW, SCI_STYLEGETBACK, STYLE_DEFAULT, 0) : 0xFFFFFF;
     _colors.background = bg;
 
+    _lineCount[MAIN_VIEW] = getView(MAIN_VIEW) ? CallScintilla(MAIN_VIEW, SCI_GETLINECOUNT, 0, 0) : 0;
+    _lineCount[SUB_VIEW]  = getView(SUB_VIEW)  ? CallScintilla(SUB_VIEW,  SCI_GETLINECOUNT, 0, 0) : 0;
+
+    // SHARED pixels-per-line scale (== Windows m_pixelsPerLine = navHeight /
+    // max(lines0, lines1), capped at 5). Both columns use the same scale, so
+    // each line is plotted by its RAW document line number — the longer file
+    // fills the height and the shorter file's column ends early (empty below),
+    // exactly like the Windows NavBar.
+    intptr_t maxLines = std::max(_lineCount[MAIN_VIEW], _lineCount[SUB_VIEW]);
+    if (maxLines < 1) maxLines = 1;
+    double scale = (double)rows / (double)maxLines;
+    if (scale > 5.0) scale = 5.0;
+    _scale = scale;
+
     for (int v = 0; v < 2; ++v)
     {
-        NppHandle h   = getView(v);
-        intptr_t  lc  = h ? CallScintilla(v, SCI_GETLINECOUNT, 0, 0) : 0;
-        _lineCount[v] = lc;
+        const intptr_t lc = _lineCount[v];
+
+        int usedRows = (int)llround((double)lc * scale);
+        if (usedRows > rows) usedRows = rows;
+        if (usedRows < 0)    usedRows = 0;
+        _usedRows[v] = usedRows;
 
         std::vector<int>& col = _rows[v];
-        col.assign(rows, bg);
+        col.assign(usedRows, bg);
 
-        if (lc <= 0)
+        if (lc <= 0 || usedRows <= 0)
             continue;
 
         for (intptr_t line = 0; line < lc; ++line)
@@ -103,13 +124,18 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
             else if (m & MARKER_MASK_CHANGED) color = _colors.changed;
             else                              continue;
 
-            int row = (int)((line * (intptr_t)rows) / lc);
-            if (row < 0)         row = 0;
-            else if (row >= rows) row = rows - 1;
+            // A doc line occupies the pixel band [line*scale, (line+1)*scale)
+            // (the analog of the Windows StretchBlt vertical stretch). For
+            // scale < 1 (huge files) the band is a single pixel and diffs win.
+            int y0 = (int)floor((double)line * scale);
+            int y1 = (int)floor((double)(line + 1) * scale);
+            if (y1 <= y0) y1 = y0 + 1;
+            if (y0 < 0)        y0 = 0;
+            if (y1 > usedRows) y1 = usedRows;
 
-            // Diff colors win over background; the first diff mapped to a row wins.
-            if (col[row] == bg)
-                col[row] = color;
+            for (int y = y0; y < y1; ++y)
+                if (col[y] == bg)
+                    col[y] = color;
         }
     }
 
@@ -134,11 +160,18 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
     const CGFloat xCol[2] = { kMargin, kMargin + colW + kGap };
     const CGFloat top     = kMargin;
 
-    // Two columns of 1px diff rows
+    // Grey pen for the column borders + viewport box (== Windows RGB(128,128,128)).
+    NSColor* grey    = [NSColor colorWithSRGBRed:0.5 green:0.5 blue:0.5 alpha:1.0];
+    // Viewport selector fill = inverse of the background (== Windows
+    // hInverseBackBrush), at low alpha.
+    NSColor* selFill = nsColorFromSci(_colors.background ^ 0xFFFFFF);
+
     for (int v = 0; v < 2; ++v)
     {
         const std::vector<int>& col = _rows[v];
         const int n = (int)col.size();
+
+        // 1px diff rows
         for (int y = 0; y < n; ++y)
         {
             const int c = col[y];
@@ -147,46 +180,58 @@ static const CGFloat kGap    = 1.0;   // gap between the two columns
             [nsColorFromSci(c) setFill];
             NSRectFill(NSMakeRect(xCol[v], top + y, colW, 1.0));
         }
-    }
 
-    // Viewport indicator — both views are aligned, so one box across the full
-    // width tracks the current viewport. Map MAIN_VIEW's visible range to rows.
-    if (getView(MAIN_VIEW) && _lineCount[MAIN_VIEW] > 0)
-    {
-        const intptr_t fv     = CallScintilla(MAIN_VIEW, SCI_GETFIRSTVISIBLELINE, 0, 0);
-        const intptr_t los    = CallScintilla(MAIN_VIEW, SCI_LINESONSCREEN, 0, 0);
-        intptr_t docTop = CallScintilla(MAIN_VIEW, SCI_DOCLINEFROMVISIBLE, fv, 0);
-        intptr_t docBot = CallScintilla(MAIN_VIEW, SCI_DOCLINEFROMVISIBLE, fv + los, 0);
-        if (docBot < docTop) docBot = docTop;
+        // Grey border around the column's used height (shorter file ends early).
+        CGFloat usedH = (CGFloat)_usedRows[v];
+        if (usedH < 1) usedH = 1;
+        [grey setStroke];
+        NSFrameRectWithWidth(NSMakeRect(xCol[v] + 0.5, top + 0.5, colW - 1.0, usedH - 1.0), 1.0);
 
-        const CGFloat lc   = (CGFloat)_lineCount[MAIN_VIEW];
-        CGFloat yTop = top + (CGFloat)docTop * rows / lc;
-        CGFloat yBot = top + (CGFloat)docBot * rows / lc;
-        CGFloat hgt  = yBot - yTop;
-        if (hgt < 2) hgt = 2;
+        // Per-view viewport box, mapped by this view's own visible range and the
+        // SHARED scale — so (like Windows) the two boxes can sit at different
+        // heights when the panes are annotation-aligned.
+        if (getView(v) && _lineCount[v] > 0 && _scale > 0.0)
+        {
+            const intptr_t fv  = CallScintilla(v, SCI_GETFIRSTVISIBLELINE, 0, 0);
+            const intptr_t los = CallScintilla(v, SCI_LINESONSCREEN, 0, 0);
+            intptr_t docTop = CallScintilla(v, SCI_DOCLINEFROMVISIBLE, fv, 0);
+            intptr_t docBot = CallScintilla(v, SCI_DOCLINEFROMVISIBLE, fv + los, 0);
+            if (docBot < docTop) docBot = docTop;
 
-        const NSRect box = NSMakeRect(kMargin, yTop, b.size.width - 2 * kMargin, hgt);
-        [[NSColor colorWithSRGBRed:0.20 green:0.45 blue:0.95 alpha:0.18] setFill];
-        NSRectFill(box);
-        [[NSColor colorWithSRGBRed:0.20 green:0.45 blue:0.95 alpha:0.55] setStroke];
-        NSFrameRectWithWidth(box, 1.0);
+            CGFloat yTop = top + (CGFloat)((double)docTop * _scale);
+            CGFloat yBot = top + (CGFloat)((double)docBot * _scale);
+            if (yTop < top)           yTop = top;
+            if (yBot > top + usedH)   yBot = top + usedH;
+            CGFloat hgt = yBot - yTop;
+            if (hgt < 2) hgt = 2;
+
+            const NSRect box = NSMakeRect(xCol[v], yTop, colW, hgt);
+            [[selFill colorWithAlphaComponent:0.30] set];
+            NSRectFillUsingOperation(box, NSCompositingOperationSourceOver);
+            [grey setStroke];
+            NSFrameRectWithWidth(box, 1.0);
+        }
     }
 }
 
 // ── Interaction: scroll both editors ─────────────────────────────────────────
 - (void)scrollToY:(CGFloat)y
 {
-    const int rows = [self contentRows];
-    CGFloat frac = (y - kMargin) / (CGFloat)rows;
-    if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
+    if (_scale <= 0.0)
+        return;
+
+    // y maps to a raw document line via the shared scale (same line number in
+    // both views, matching the Windows raw-line plotting).
+    const double lineF = ((double)y - kMargin) / _scale;
 
     for (int v = 0; v < 2; ++v)
     {
         if (!getView(v) || _lineCount[v] <= 0)
             continue;
 
-        intptr_t docLine = (intptr_t)(frac * (CGFloat)_lineCount[v]);
-        if (docLine >= _lineCount[v]) docLine = _lineCount[v] - 1;
+        intptr_t docLine = (intptr_t)lineF;
+        if (docLine < 0)                  docLine = 0;
+        else if (docLine >= _lineCount[v]) docLine = _lineCount[v] - 1;
 
         const intptr_t los     = CallScintilla(v, SCI_LINESONSCREEN, 0, 0);
         intptr_t       visLine = CallScintilla(v, SCI_VISIBLEFROMDOCLINE, docLine, 0) - los / 2;

@@ -60,7 +60,7 @@
 // =====================================================================
 
 static const char* PLUGIN_NAME = "ComparePlus";
-static const char* PLUGIN_VERSION = "1.0.3";
+static const char* PLUGIN_VERSION = "1.0.4";
 
 
 // =====================================================================
@@ -100,6 +100,8 @@ static bool scrollSyncEnabled = true;
 static bool autoRecompareEnabled = false;
 static bool bookmarksAsSyncPoints = false;
 static bool navBarVisible = false;
+static bool lastDarkMode = false;   // tracks NPPM_ISDARKMODEENABLED; the host sends no
+                                    // NPPN_DARKMODECHANGED, so we poll for theme flips.
 
 // Build the NavBar diff colors from the active theme's color settings.
 static NavBar::Colors navBarColors()
@@ -2645,6 +2647,7 @@ static void handleReady()
         Settings.useDarkColors();
     else
         Settings.useLightColors();
+    lastDarkMode = isDarkModeNPP();
 
     // Set up markers
     setupMarkers();
@@ -2775,10 +2778,14 @@ static void handleDarkModeChanged()
     else
         Settings.useLightColors();
 
-    applyMarkerColors();
-
+    // Re-applying marker definitions is only needed/safe during an active
+    // compare (outside compare it can disturb the fold markers, which is why
+    // applyMarkerColors is normally deferred to compare time).
     if (compareMode)
+    {
+        applyMarkerColors();
         setStyles(Settings);
+    }
 
     // Re-render the NavBar with the new theme colors.
     if (NavBar::IsVisible())
@@ -2794,6 +2801,19 @@ static void scheduleRecompareCheck()
 {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
+        // Poll for a theme (dark mode) change — the host sends no
+        // NPPN_DARKMODECHANGED, so we detect the flip here and re-apply colors
+        // live (editor markers + NavBar) instead of only at restart.
+        if (pluginReady)
+        {
+            bool dm = isDarkModeNPP();
+            if (dm != lastDarkMode)
+            {
+                lastDarkMode = dm;
+                handleDarkModeChanged();
+            }
+        }
+
         if (recompareNeeded && compareMode && autoRecompareEnabled && pluginReady)
         {
             recompareNeeded = false;
