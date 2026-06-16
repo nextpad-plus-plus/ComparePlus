@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # Keep PROJECT_VERSION in sync with PLUGIN_VERSION in src/ComparePlus.mm — it is
 # stamped into the dylib's Mach-O current_version (see target_link_options below).
-project(ComparePlus VERSION 1.0.4 LANGUAGES CXX OBJCXX)
+project(ComparePlus VERSION 1.0.5 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OBJCXX_STANDARD 17)
@@ -55,7 +55,7 @@ target_link_options(ComparePlus PRIVATE
 )
 
 # Install target
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.nextpad++/plugins/ComparePlus")
+set(PLUGIN_INSTALL_DIR "$ENV{HOME}/Library/Application Support/Nextpad++/plugins/ComparePlus")
 install(TARGETS ComparePlus DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # Toolbar icons. The plugin source passes bare filenames (e.g.

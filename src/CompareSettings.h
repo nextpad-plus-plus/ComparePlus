@@ -111,8 +111,9 @@ struct ColorSettings
 // =====================================================================
 //  UserSettings — all persistent plugin settings
 //
-//  On macOS the config is stored as JSON in:
-//      ~/.nextpad++/plugins/Config/ComparePlus.json
+//  On macOS the config is stored as JSON under the host's plugin config dir
+//  (NPPM_GETPLUGINSCONFIGDIR)/ComparePlus.json — e.g.
+//      ~/Library/Application Support/Nextpad++/plugins/Config/ComparePlus.json
 //  rather than a Windows INI file.
 // =====================================================================
 

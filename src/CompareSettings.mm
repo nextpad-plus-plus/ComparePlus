@@ -134,10 +134,11 @@ static std::string configFilePath()
     std::string path = getPluginsConfigDir();
     if (path.empty())
     {
-        // Fallback
+        // Fallback only if the host returns empty (it does not on shipped
+        // versions). Use the macOS app-support base, NOT a legacy ~/.nextpad++.
         const char* home = getenv("HOME");
         if (home)
-            path = std::string(home) + "/.nextpad++/plugins/Config";
+            path = std::string(home) + "/Library/Application Support/Nextpad++/plugins/Config";
     }
     path += "/ComparePlus.json";
     return path;
