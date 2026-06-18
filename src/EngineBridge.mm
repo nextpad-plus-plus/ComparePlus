@@ -4,14 +4,45 @@
  * by calling Scintilla directly through the plugin's sendMessage callback.
  */
 
+#import <Foundation/Foundation.h>
 #include "NppPluginInterfaceMac.h"
 #include "Scintilla.h"
 
 // Access the global nppData (defined in ComparePlus.mm)
 extern NppData nppData;
 
+// ---------------------------------------------------------------------------
+//  Per-view Scintilla redirect
+//
+//  On macOS the host gives every tab its own ScintillaView and routes the
+//  MAIN/SUB plugin handles to whatever tab is *currently active* in each split
+//  view. That makes it impossible, via the normal handle, to address a tab the
+//  user has switched away from. When a redirect is set for a view, CallScintilla
+//  for that view is dispatched straight to the supplied ScintillaView instead —
+//  exactly as the host does internally (`[sv message:wParam:lParam:]`). Used by
+//  clearAllCompares() to clear the originating compare tabs even after a switch
+//  (issues #7/#9). Pass nil to restore the default routing.
+// ---------------------------------------------------------------------------
+
+@protocol _CPScintillaMessaging
+- (sptr_t)message:(unsigned int)message wParam:(uptr_t)wParam lParam:(sptr_t)lParam;
+@end
+
+static __unsafe_unretained id<_CPScintillaMessaging> gSciRedirect[2] = { nil, nil };
+
+// Identity-only; never owns the view. Always cleared (nil) synchronously after
+// the redirected call sequence, so the target can't dangle.
+void setScintillaRedirect(int viewNum, id scintillaView)
+{
+    if (viewNum == 0 || viewNum == 1)
+        gSciRedirect[viewNum] = (id<_CPScintillaMessaging>)scintillaView;
+}
+
 static inline intptr_t sci(int viewNum, unsigned int uMsg, uintptr_t wParam = 0, intptr_t lParam = 0)
 {
+    if ((viewNum == 0 || viewNum == 1) && gSciRedirect[viewNum])
+        return (intptr_t)[gSciRedirect[viewNum] message:uMsg wParam:(uptr_t)wParam lParam:(sptr_t)lParam];
+
     NppHandle h = (viewNum == 0) ? nppData._scintillaMainHandle : nppData._scintillaSecondHandle;
     return nppData._sendMessage(h, uMsg, wParam, lParam);
 }

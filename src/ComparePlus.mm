@@ -60,7 +60,7 @@
 // =====================================================================
 
 static const char* PLUGIN_NAME = "ComparePlus";
-static const char* PLUGIN_VERSION = "1.0.5";
+static const char* PLUGIN_VERSION = "1.0.6";
 
 
 // =====================================================================
@@ -127,6 +127,17 @@ static bool syncingScroll = false;
 // Saved SCI_GETSCROLLWIDTHTRACKING state for [MAIN_VIEW]/[SUB_VIEW], captured at
 // compare start and restored on clear (host-regression hardening — see doCompare).
 static int savedScrollWidthTracking[2] = { -1, -1 };
+
+// Implemented in EngineBridge.mm — temporarily routes CallScintilla(view) calls
+// straight to a specific editor's ScintillaView (so a clear can target the tab
+// that actually carries the markers even after the user switches tabs). nil
+// restores the host's default active-tab routing.
+extern void setScintillaRedirect(int viewNum, id scintillaView);
+
+// Raw EditorView* identity of the two editors that carry the active compare's
+// markers, captured at compare time. NEVER messaged without first re-verifying
+// the pointer against the host's live editor list (see comparedScintillaView).
+static void *comparedEditorPtr[2] = { nullptr, nullptr };
 
 // Saved user "Mouse wheel scroll speed" gain, suspended during compare (see doCompare).
 static id   savedScrollSpeedGain      = nil;   // NSNumber*, or nil if it was unset
@@ -477,6 +488,69 @@ static void hostAction(SEL sel)
 }
 
 
+// =====================================================================
+//  Compared-editor tracking (clears the right tab after a tab switch)
+// =====================================================================
+
+// Capture the two editors a just-started compare marks — the active editor of
+// each split view, mirroring the host's editorForPluginView: resolution
+// (MAIN_VIEW → primary tab manager, SUB_VIEW → vertical sub view). These are the
+// editors that CallScintilla(view) targets at compare time, so they are exactly
+// the ones that receive the diff markers.
+static void captureComparedEditors()
+{
+    comparedEditorPtr[MAIN_VIEW] = nullptr;
+    comparedEditorPtr[SUB_VIEW]  = nullptr;
+
+    id wc = getHostController();
+    if (!wc)
+        return;
+
+    @try {
+        id mainTM = [wc valueForKey:@"_tabManager"];
+        id subTM  = [wc valueForKey:@"_subTabManagerV"];
+        id mainEd = mainTM ? [mainTM valueForKey:@"currentEditor"] : nil;
+        id subEd  = subTM  ? [subTM  valueForKey:@"currentEditor"] : nil;
+        if (mainEd) comparedEditorPtr[MAIN_VIEW] = (__bridge void *)mainEd;
+        if (subEd)  comparedEditorPtr[SUB_VIEW]  = (__bridge void *)subEd;
+    } @catch (...) {}
+}
+
+// Resolve the ScintillaView of the compared editor for `view`, but only if that
+// EditorView is still open — verified by pointer identity against the host's
+// live editor lists (mirrors the host's own crash-safe bufferID handling: the
+// raw pointer is compared, never messaged, until matched against a known
+// editor). Returns nil if the tab was closed, in which case callers fall back to
+// the host's default routing — harmless, since a closed tab has nothing to clear.
+static id comparedScintillaView(int view)
+{
+    if (view != MAIN_VIEW && view != SUB_VIEW)
+        return nil;
+
+    void *target = comparedEditorPtr[view];
+    if (!target)
+        return nil;
+
+    id wc = getHostController();
+    if (!wc)
+        return nil;
+
+    for (NSString *key in @[ @"_tabManager", @"_subTabManagerV", @"_subTabManagerH" ]) {
+        id tm = nil;
+        @try { tm = [wc valueForKey:key]; } @catch (...) { continue; }
+        if (!tm)
+            continue;
+        @try {
+            for (id ed in [tm valueForKey:@"allEditors"]) {
+                if ((__bridge void *)ed == target)
+                    return [ed valueForKey:@"scintillaView"];
+            }
+        } @catch (...) {}
+    }
+    return nil;
+}
+
+
 // Pre-captured selection lines for selection compare (set before doCompare)
 static std::pair<intptr_t, intptr_t> savedSelectionMain = {-1, -1};
 static std::pair<intptr_t, intptr_t> savedSelectionSub  = {-1, -1};
@@ -552,6 +626,10 @@ static void doCompare(bool selectionOnly, bool findUniqueMode, bool skipSetup)
     // Store buffer IDs for the compare pair
     compareBuffIds[MAIN_VIEW] = getBuffIdForView(MAIN_VIEW);
     compareBuffIds[SUB_VIEW]  = getBuffIdForView(SUB_VIEW);
+
+    // Remember exactly which editors get marked so a later clear can target them
+    // directly, even if the user switches tabs in either view first (issues #7/#9).
+    captureComparedEditors();
 
     // Encoding check
     if (Settings.EncodingsCheck)
@@ -822,18 +900,35 @@ static void clearAllCompares()
     if (!compareMode)
         return;
 
+    // The host routes CallScintilla(MAIN/SUB_VIEW) to the *currently active* tab
+    // of each split view. If the user switched tabs after starting the compare,
+    // clearing "the view" would scrub the now-active tab and leave the
+    // originating tab still showing diff markers (issues #7/#9). Redirect each
+    // view's Scintilla calls straight to the editor that was actually compared so
+    // every clear lands on the right tab regardless of what is active now. nil
+    // (a since-closed tab) safely falls back to the default routing.
+    setScintillaRedirect(MAIN_VIEW, comparedScintillaView(MAIN_VIEW));
+    setScintillaRedirect(SUB_VIEW,  comparedScintillaView(SUB_VIEW));
+
     clearCompare(MAIN_VIEW);
     clearCompare(SUB_VIEW);
 
     NavBar::Hide();
 
-    // Restore scroll-width tracking disabled in doCompare (host-regression hardening).
+    // Restore scroll-width tracking disabled in doCompare (host-regression
+    // hardening). Still redirected to the compared editors — that is where the
+    // state was captured and turned off.
     for (int v = MAIN_VIEW; v <= SUB_VIEW; ++v) {
         if (savedScrollWidthTracking[v] >= 0) {
             CallScintilla(v, SCI_SETSCROLLWIDTHTRACKING, (uintptr_t)savedScrollWidthTracking[v], 0);
             savedScrollWidthTracking[v] = -1;
         }
     }
+
+    // Done touching the compared editors — restore the host's default routing
+    // before any further Scintilla use.
+    setScintillaRedirect(MAIN_VIEW, nil);
+    setScintillaRedirect(SUB_VIEW,  nil);
 
     // Restore the mouse-wheel scroll speedup suspended in doCompare.
     if (scrollSpeedGainOverridden) {
@@ -849,6 +944,8 @@ static void clearAllCompares()
     compareMode = false;
     compareBuffIds[0] = -1;
     compareBuffIds[1] = -1;
+    comparedEditorPtr[0] = nullptr;
+    comparedEditorPtr[1] = nullptr;
     activeSummary.clear();
     recompareNeeded = false;
 
